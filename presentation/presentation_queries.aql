@@ -1,0 +1,387 @@
+// Get
+
+FOR user IN users
+    RETURN user
+
+// Filter
+
+FOR user IN users
+    FILTER user._id = 'users/100'
+    RETURN user
+
+// Get custom properties
+
+FOR user IN users
+    FILTER user._id = 'users/100'
+    RETURN {
+        age: user.age,
+        name: user.name
+    }
+
+// Sort
+
+FOR user IN users
+    FILTER user.active == true && user.age >= 30
+    SORT user.age DESC
+    LIMIT 0, 5
+    RETURN {
+        "age" : user.age,
+        "name" : user.name
+    }
+
+// Count
+
+RETURN LENGTH(collection)
+
+
+
+///////////////// MODIFICATIONS
+
+// BASICS
+
+UPSERT <search-expression> // find doc with specific attr expression (index)
+INSERT <insert-expression> // create if not exists
+UPDATE <update-expression> // update if exists
+REPLACE <replace-expression> // override if exists
+REMOVE <key-expression> // remove doc with key
+IN <collection> OPTIONS <options>
+
+// Create
+
+FOR i IN 1..1000
+    INSERT {
+        id: 100000 + i,
+        age: 18 + FLOOR(RAND() * 25),
+        name: CONCAT('test', TO_STRING(i)),
+        active: false,
+        gender: i % 2 == 0 ? 'm' : 'f'
+    } IN users
+
+// Remove
+
+FOR user IN users
+    FILTER user.active == true AND user.age >= 35 && user.age <= 37
+    REMOVE user IN users // or REMOVE user._key IN users
+
+// Copying data from one collection into another
+
+FOR u IN users
+    INSERT u IN backup
+
+// Update existing attribute
+
+FOR user IN users
+    UPDATE user WITH {
+        gender: TRANSLATE(user.gender, { m: 'male', f: 'female' })
+    }
+    IN users
+
+// Update - add new attribute
+
+FOR user IN users
+    FILTER user.active == true
+    UPDATE user WITH { numberOfLogins: 0 } IN users
+
+// Update - based on their previous value (if exists already)
+
+FOR user IN users
+    FILTER user.active == true
+    UPDATE user WITH { numberOfLogins: user.numberOfLogins + 1 } IN users
+
+// Update - based on their previous value (if exists or create new value)
+
+FOR user IN users
+    FILTER user.active == true
+    UPDATE user WITH {
+        numberOfLogins: HAS(user, 'numberOfLogins') ? user.numberOfLogins + 1 : 1
+    } IN users
+
+// Conditionally Inserting and Modifying
+
+UPSERT { page: "index.html" }
+INSERT { page: "index.html", status: "inserted" }
+UPDATE { status: "updated" }
+// or
+REPLACE { page: "index.html", status: "updated" }
+IN pages
+
+///////////////////// ADVANCE
+
+// Subqueries
+
+FOR person IN persons
+    LET recommendations = ( // subquery start
+        FOR recommendation IN recommendations
+            FILTER person.id == recommendation.personId
+            SORT person.rank DESC
+            LIMIT 10
+            RETURN recommendation
+    ) // subquery end
+    RETURN { person : person, recommendations : recommendations }
+
+// Conditional queries
+
+LET maybe = DOCUMENT("coll/does_not_exist")
+LET dependent = maybe ? (
+    FOR attr IN NOT_NULL(ATTRIBUTES(maybe || {}), [])
+        RETURN attr
+) : "document not found"
+RETURN dependent
+
+// Dynamic attributes
+
+LET documents = [
+    { "_key" : "3231748397810", "gender" : "f", "status" : "active", "type" : "user" },
+    { "_key" : "3231754427122", "gender" : "m", "status" : "inactive", "type" : "unknown" }
+]
+
+FOR doc IN documents
+    RETURN {
+        [ doc.type ] : {
+            [ CONCAT(doc._key, "_gender") ] : doc.gender,
+            [ CONCAT(doc._key, "_status") ] : doc.status
+        }
+    }
+
+// Get attributes from array
+
+LET documents = [
+    { "name": "test"," gender": "f", "status": "active", "type": "user" },
+    { "name": "dummy", "gender": "m", "status": "inactive", "type": "unknown", "magicFlag": 23 }
+]
+
+FOR doc IN documents
+LET attrs = (
+    FOR name IN ATTRIBUTES(doc)
+    FILTER LIKE(name, '%a%')
+    RETURN {
+        name: CONCAT(doc.name, '-', name),
+        value: doc[name]
+    }
+)
+RETURN ZIP(attrs[*].name, attrs[*].value)
+// zip(keys, values) -> [{key1: value1...}}, ...]
+// array_of_docs[*].attribute = [attr1, attr2,...]
+
+// diffing two documents
+
+// input document 1
+LET doc1 = {
+    "foo": "bar",
+    "a": 1,
+    "b": 2
+}
+
+// input document 2
+LET doc2 = {
+    "foo": "baz",
+    "a": 2,
+    "c": 3
+}
+
+// collect attributes present in doc1, but missing in doc2
+LET missing = (
+    FOR key IN ATTRIBUTES(doc1)
+    FILTER ! HAS(doc2, key)
+    RETURN {
+        [ key ]: doc1[key]
+    }
+)
+
+RETURN missing
+
+//////////////////// JOINS
+
+// Join (one to many)
+
+FOR user IN users
+    FOR city IN cities
+        FILTER user.city == city._id
+        RETURN { user: user, city: city }
+
+// Join (many to many)
+
+FOR book IN books
+    LET book_authors = (
+        FOR book_author IN book.authors
+        FOR author IN authors
+        FILTER book_author == author._id
+        RETURN author
+    )
+    RETURN { book: book, authors: book_authors }
+    // or
+    RETURN MERGE(book, { authors: book_authors })
+
+// Join (fancy form vs verbose form)
+
+// fancy
+FOR character IN Characters
+    RETURN MERGE(character, { traits: DOCUMENT("Traits", character.traits)[*].en } )
+
+// same as above but more verbose
+FOR character IN Characters
+RETURN MERGE(character, {
+    traits: (
+        FOR key IN character.traits
+        FOR trait IN Traits
+            FILTER trait._key == key
+            RETURN trait.en
+    )
+})
+
+//////////////////////// AGGREGATIONS
+
+// unique values
+
+FOR user IN users
+    COLLECT age = user.age // make a result set unique
+    RETURN age
+
+// or
+
+FOR user IN users
+    RETURN DISTINCT user.age
+
+// group
+
+FOR user IN users
+    FILTER user.active == true
+    COLLECT age = user.age, name = user.name INTO usersByAge
+    SORT age DESC
+    LIMIT 0, 5
+    RETURN {
+        age,
+        users: usersByAge[*].user.name
+    }
+
+// aggregation
+
+FOR user IN users
+    FILTER user.active == true
+    COLLECT ageGroup = FLOOR(user.age / 5) * 5,
+            gender = user.gender
+    AGGREGATE numUsers = LENGTH(1),
+              minAge = MIN(user.age),
+              maxAge = MAX(user.age)
+    SORT ageGroup DESC
+    RETURN {
+        ageGroup,
+        gender,
+        numUsers,
+        minAge,
+        maxAge
+    }
+
+// post aggregation
+
+FOR user IN users
+    FILTER user.active == true
+    COLLECT ageGroup = FLOOR(user.age / 5) * 5,
+            gender = user.gender INTO group
+    SORT ageGroup DESC
+    RETURN {
+        ageGroup,
+        gender,
+        numUsers: LENGTH(group[*]),
+        minAge: MIN(group[*].user.age),
+        maxAge: MAX(group[*].user.age)
+    }
+
+// post aggregation filtering
+
+FOR user IN users
+    FILTER user.active == true
+    COLLECT ageGroup = FLOOR(user.age / 5) * 5 INTO group
+    LET numUsers = LENGTH(group)
+    FILTER numUsers > 2 /* group must contain at least 3 users in order to qualify */
+    SORT numUsers DESC
+    LIMIT 0, 3
+    RETURN {
+        "ageGroup": ageGroup,
+        "numUsers": numUsers,
+        "users": group[*].user.name
+    }
+
+/////////////// RELATIONS/GRAPHS
+
+// Working with graphs
+
+FOR vertex[, edge[, path]] IN [min[..max]]
+    OUTBOUND|INBOUND|ANY startVertex
+    edgeCollection1, ..., edgeCollectionN
+    [PRUNE pruneCondition] // reduce the amount of data to be checked during a search
+    [OPTIONS options]
+
+// Filter on the entire graph
+
+FOR v, e, p IN 1..5 OUTBOUND 'circles/A' GRAPH 'traversalGraph'
+    FILTER p.edges[*].theTruth ALL == true
+    RETURN { vertices: p.vertices[*]._key, edges: p.edges[*].label }
+
+// Given a graph [actors] – actsIn → [movies]
+
+FOR vertex IN ANY 'movies/TheMatrix' actsIn
+    OPTIONS { order: 'bfs', uniqueVertices: 'global' }
+    RETURN vertex._id
+
+// All actors who acted in 3 or more movies
+
+FOR edge IN actsIn
+    COLLECT actor = edge._from WITH COUNT INTO counter
+    FILTER counter >= 3
+    RETURN { actor: actor, movies: counter }
+
+// The number of actors by movie
+
+FOR edge IN actsIn
+    COLLECT movie = edge._to WITH COUNT INTO counter
+    RETURN { movie: movie, actors: counter }
+
+// The years and number of movies by actor with actor name
+
+FOR edge IN actsIn
+    FILTER edge._from IN [ "actors/TomH", "actors/Keanu" ]
+    COLLECT actor = edge._from INTO years = edge.year
+    RETURN {
+        name: DOCUMENT(actor).name,
+        movies: COUNT(years),
+        years
+    }
+
+// https://www.arangodb.com/docs/stable/images/mps_graph.png
+
+FOR v, e, p IN 2..2 OUTBOUND "mps_verts/A" mps_edges
+    FILTER v._id == "mps_verts/C"
+    RETURN CONCAT_SEPARATOR(" -> ", p.vertices[*]._key)
+
+// result
+[
+    "A -> B -> C",
+    "A -> D -> C"
+]
+
+// Given a graph [characters] – ChildOf → [characters]
+
+FOR v IN 1..1 OUTBOUND "Characters/2901776" ChildOf
+    RETURN v.name
+
+// parent
+
+FOR character IN Characters
+    FILTER character.name == "Bran"
+    FOR v IN 1..1 OUTBOUND character ChildOf
+        RETURN v.name
+
+// children
+
+FOR character IN Characters
+    FILTER character.name == "Ned"
+    FOR v IN 1..1 INBOUND character ChildOf
+        RETURN v.name
+
+// grandchildren
+
+FOR character IN Characters
+    FILTER character.name == "Tywin"
+    FOR v IN 2..2 INBOUND character ChildOf
+        RETURN v.name

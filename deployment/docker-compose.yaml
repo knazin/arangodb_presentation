@@ -1,0 +1,26 @@
+version: '3.3'
+services:
+  app:
+    image: "arango_fastapi_app:latest"
+    container_name: "app"
+    command: ["uvicorn", "app:app", "--reload", "--log-level", "info", "--workers", "1", "--host", "0.0.0.0", "--port", "8000"]
+    restart: "always"
+    ports:
+    - "8000:8000"
+    volumes:
+      - ./../backend:/app
+    depends_on:
+      - arangodb
+  arangodb:
+    image: "arangodb:3.9"
+    container_name: "arangodb"
+    ports:
+      - 8529:8529
+    environment:
+      - ARANGO_ROOT_PASSWORD=${ARANGO_ROOT_PASSWORD}
+    volumes:
+      - ./../data/dump:/dump
+      - arangodb:/var/lib/arangodb3
+
+volumes:
+  arangodb:
